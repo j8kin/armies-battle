@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
-import { HeroUnitName } from '../types/UnitType';
+import { HeroUnitName, RegularUnitName, WarMachineName } from '../types/UnitType';
 import { unitCombatStats } from '../domain/army/unitRepository';
 import type { UnitType, HeroUnitType, RegularUnitType, WarMachineType } from '../types/UnitType';
+import { isHeroType, isWarMachine } from '../domain/army/unitTypeChecks';
 
 export type Phase = 'deploy' | 'battle';
 export type Team = 'attacker' | 'defender';
@@ -48,40 +49,40 @@ const TEAM_COLORS: Record<Team, number> = {
 // Unit type colors for visual differentiation
 const UNIT_TYPE_COLORS: Partial<Record<UnitType, number>> = {
   // Regular units - Neutral colors
-  'Ward-hands': 0xcccccc,
-  Warrior: 0xaaaaaa,
-  Dwarf: 0x8b4513,
-  Orc: 0x228b22,
-  Halfling: 0xdaa520,
-  Elf: 0x90ee90,
-  'Dark-Elf': 0x4b0082,
-  Golem: 0x808080,
-  Gargoyle: 0x696969,
-  Dendrite: 0x2e8b57,
-  Undead: 0x8b008b,
+  [RegularUnitName.WARD_HANDS]: 0xcccccc,
+  [RegularUnitName.WARRIOR]: 0xaaaaaa,
+  [RegularUnitName.DWARF]: 0x8b4513,
+  [RegularUnitName.ORC]: 0x228b22,
+  [RegularUnitName.HALFLING]: 0xdaa520,
+  [RegularUnitName.ELF]: 0x90ee90,
+  [RegularUnitName.DARK_ELF]: 0x4b0082,
+  [RegularUnitName.GOLEM]: 0x808080,
+  [RegularUnitName.GARGOYLE]: 0x696969,
+  [RegularUnitName.DENDRITE]: 0x2e8b57,
+  [RegularUnitName.UNDEAD]: 0x8b008b,
   // Heroes - Bright colors
-  Fighter: 0xff6347,
-  'Hammer-lord': 0xffa500,
-  Ranger: 0x32cd32,
-  Shadowblade: 0x9370db,
-  Ogr: 0xff4500,
-  Pyromancer: 0xff0000,
-  Cleric: 0xffffff,
-  Druid: 0x00ff00,
-  Enchanter: 0x00bfff,
-  Necromancer: 0x800080,
-  Warsmith: 0xffd700,
+  [HeroUnitName.FIGHTER]: 0xff6347,
+  [HeroUnitName.HAMMER_LORD]: 0xffa500,
+  [HeroUnitName.RANGER]: 0x32cd32,
+  [HeroUnitName.SHADOW_BLADE]: 0x9370db,
+  [HeroUnitName.OGR]: 0xff4500,
+  [HeroUnitName.PYROMANCER]: 0xff0000,
+  [HeroUnitName.CLERIC]: 0xffffff,
+  [HeroUnitName.DRUID]: 0x00ff00,
+  [HeroUnitName.ENCHANTER]: 0x00bfff,
+  [HeroUnitName.NECROMANCER]: 0x800080,
+  [HeroUnitName.WARSMITH]: 0xffd700,
   // War machines - Dark metallic colors
-  Ballista: 0x2f4f4f,
-  Catapult: 0x3c3c3c,
-  'Battering Ram': 0x4a4a4a,
-  'Siege Tower': 0x555555,
+  [WarMachineName.BALLISTA]: 0x2f4f4f,
+  [WarMachineName.CATAPULT]: 0x3c3c3c,
+  [WarMachineName.BATTERING_RAM]: 0x4a4a4a,
+  [WarMachineName.SIEGE_TOWER]: 0x555555,
 };
 
 export default class BattleScene extends Phaser.Scene {
   private phase: Phase = 'deploy';
   private deployTeam: Team = 'attacker';
-  private deployUnitType: RegularUnitType | HeroUnitType | WarMachineType = 'Warrior';
+  private deployUnitType: RegularUnitType | HeroUnitType | WarMachineType = RegularUnitName.WARRIOR;
   private units = new Map<number, Unit>();
   private attackers: Unit[] = [];
   private defenders: Unit[] = [];
@@ -104,7 +105,12 @@ export default class BattleScene extends Phaser.Scene {
         return;
       }
       const teamUnits = this.getUnitsForTeam(this.deployTeam);
-      if (teamUnits.length + PACK_SIZE > MAX_UNITS) {
+
+      // Determine how many units will be spawned
+      const isSingleUnit = isHeroType(this.deployUnitType) || isWarMachine(this.deployUnitType);
+      const unitsToSpawn = isSingleUnit ? 1 : PACK_SIZE;
+
+      if (teamUnits.length + unitsToSpawn > MAX_UNITS) {
         return;
       }
       this.spawnPack(pointer.x, pointer.y, this.deployTeam, this.deployUnitType);
@@ -180,17 +186,31 @@ export default class BattleScene extends Phaser.Scene {
   }
 
   private spawnPack(x: number, y: number, team: Team, type: RegularUnitType | HeroUnitType | WarMachineType) {
-    const startX = x - ((PACK_COLS - 1) * PACK_SPACING) / 2;
-    const startY = y - ((PACK_ROWS - 1) * PACK_SPACING) / 2;
     const zone = this.getZoneForTeam(team);
     const minX = zone.x + 8;
     const maxX = zone.x + zone.width - 8;
 
-    for (let row = 0; row < PACK_ROWS; row += 1) {
-      for (let col = 0; col < PACK_COLS; col += 1) {
-        const unitX = Phaser.Math.Clamp(startX + col * PACK_SPACING, minX, maxX);
-        const unitY = Phaser.Math.Clamp(startY + row * PACK_SPACING, 10, MAP_HEIGHT - 10);
-        this.createUnit(unitX, unitY, team, type);
+    // Check if this is a Hero or WarMachine - they spawn as single units
+    const heroUnits = Object.values(HeroUnitName);
+    const warMachines = ['Ballista', 'Catapult', 'Battering Ram', 'Siege Tower'];
+    const isSingleUnit = heroUnits.includes(type as HeroUnitType) || warMachines.includes(type);
+
+    if (isSingleUnit) {
+      // Spawn only 1 unit at the clicked position
+      const unitX = Phaser.Math.Clamp(x, minX, maxX);
+      const unitY = Phaser.Math.Clamp(y, 10, MAP_HEIGHT - 10);
+      this.createUnit(unitX, unitY, team, type);
+    } else {
+      // Spawn a pack of regular units in a grid formation
+      const startX = x - ((PACK_COLS - 1) * PACK_SPACING) / 2;
+      const startY = y - ((PACK_ROWS - 1) * PACK_SPACING) / 2;
+
+      for (let row = 0; row < PACK_ROWS; row += 1) {
+        for (let col = 0; col < PACK_COLS; col += 1) {
+          const unitX = Phaser.Math.Clamp(startX + col * PACK_SPACING, minX, maxX);
+          const unitY = Phaser.Math.Clamp(startY + row * PACK_SPACING, 10, MAP_HEIGHT - 10);
+          this.createUnit(unitX, unitY, team, type);
+        }
       }
     }
   }
