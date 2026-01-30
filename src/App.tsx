@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import Phaser from 'phaser';
-import BattleScene, { BattleStats, UnitType, Team } from './game/BattleScene';
 import './App.css';
+import BattleScene from './game/BattleScene';
+import { HeroUnitName, RegularUnitName } from './types/UnitType';
+import type { BattleStats, Team } from './game/BattleScene';
+import type { UnitType } from './types/UnitType';
 
 const PHASER_WIDTH = 1200;
 const PHASER_HEIGHT = 700;
@@ -15,7 +18,7 @@ function App() {
     defender: 0,
   });
   const [deployTeam, setDeployTeam] = useState<Team>('attacker');
-  const [deployUnitType, setDeployUnitType] = useState<UnitType>('melee');
+  const [deployUnitType, setDeployUnitType] = useState<UnitType>(RegularUnitName.WARRIOR);
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -65,7 +68,7 @@ function App() {
   const resetBattle = () => {
     sceneRef.current?.resetBattle();
     setDeployTeam('attacker');
-    setDeployUnitType('melee');
+    setDeployUnitType(RegularUnitName.WARRIOR);
   };
 
   return (
@@ -112,22 +115,35 @@ function App() {
           </div>
         </div>
         <div className="control-group">
-          <span>Unit type</span>
-          <div className="button-row">
-            <button
-              type="button"
-              className={deployUnitType === 'melee' ? 'is-active' : ''}
-              onClick={() => setDeployUnitType('melee')}
-            >
-              Melee pack
-            </button>
-            <button
-              type="button"
-              className={deployUnitType === 'ranged' ? 'is-active' : ''}
-              onClick={() => setDeployUnitType('ranged')}
-            >
-              Ranged pack
-            </button>
+          <span>Regular Units</span>
+          <div className="button-row" style={{ flexWrap: 'wrap', gap: '4px' }}>
+            {Object.values(RegularUnitName).map((unitName) => (
+              <button
+                key={unitName}
+                type="button"
+                className={deployUnitType === unitName ? 'is-active' : ''}
+                onClick={() => setDeployUnitType(unitName)}
+                style={{ fontSize: '12px', padding: '4px 8px' }}
+              >
+                {unitName}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="control-group">
+          <span>Hero Units</span>
+          <div className="button-row" style={{ flexWrap: 'wrap', gap: '4px' }}>
+            {Object.values(HeroUnitName).map((unitName) => (
+              <button
+                key={unitName}
+                type="button"
+                className={deployUnitType === unitName ? 'is-active' : ''}
+                onClick={() => setDeployUnitType(unitName)}
+                style={{ fontSize: '12px', padding: '4px 8px' }}
+              >
+                {unitName}
+              </button>
+            ))}
           </div>
         </div>
         <div className="control-group">

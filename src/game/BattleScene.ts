@@ -1,8 +1,10 @@
 import Phaser from 'phaser';
+import { HeroUnitName } from '../types/UnitType';
+import { unitCombatStats } from '../domain/army/unitRepository';
+import type { UnitType, HeroUnitType, RegularUnitType, WarMachineType } from '../types/UnitType';
 
 export type Phase = 'deploy' | 'battle';
 export type Team = 'attacker' | 'defender';
-export type UnitType = 'melee' | 'ranged';
 
 export interface BattleStats {
   phase: Phase;
@@ -13,7 +15,7 @@ export interface BattleStats {
 interface Unit {
   id: number;
   team: Team;
-  type: UnitType;
+  type: RegularUnitType | HeroUnitType | WarMachineType;
   attack: number;
   defense: number;
   hp: number;
@@ -43,10 +45,43 @@ const TEAM_COLORS: Record<Team, number> = {
   defender: 0xfb4d46,
 };
 
+// Unit type colors for visual differentiation
+const UNIT_TYPE_COLORS: Partial<Record<UnitType, number>> = {
+  // Regular units - Neutral colors
+  'Ward-hands': 0xcccccc,
+  Warrior: 0xaaaaaa,
+  Dwarf: 0x8b4513,
+  Orc: 0x228b22,
+  Halfling: 0xdaa520,
+  Elf: 0x90ee90,
+  'Dark-Elf': 0x4b0082,
+  Golem: 0x808080,
+  Gargoyle: 0x696969,
+  Dendrite: 0x2e8b57,
+  Undead: 0x8b008b,
+  // Heroes - Bright colors
+  Fighter: 0xff6347,
+  'Hammer-lord': 0xffa500,
+  Ranger: 0x32cd32,
+  Shadowblade: 0x9370db,
+  Ogr: 0xff4500,
+  Pyromancer: 0xff0000,
+  Cleric: 0xffffff,
+  Druid: 0x00ff00,
+  Enchanter: 0x00bfff,
+  Necromancer: 0x800080,
+  Warsmith: 0xffd700,
+  // War machines - Dark metallic colors
+  Ballista: 0x2f4f4f,
+  Catapult: 0x3c3c3c,
+  'Battering Ram': 0x4a4a4a,
+  'Siege Tower': 0x555555,
+};
+
 export default class BattleScene extends Phaser.Scene {
   private phase: Phase = 'deploy';
   private deployTeam: Team = 'attacker';
-  private deployUnitType: UnitType = 'melee';
+  private deployUnitType: RegularUnitType | HeroUnitType | WarMachineType = 'Warrior';
   private units = new Map<number, Unit>();
   private attackers: Unit[] = [];
   private defenders: Unit[] = [];
@@ -115,7 +150,7 @@ export default class BattleScene extends Phaser.Scene {
     this.emitStats();
   }
 
-  setDeployUnitType(type: UnitType) {
+  setDeployUnitType(type: RegularUnitType | HeroUnitType | WarMachineType) {
     this.deployUnitType = type;
     this.emitStats();
   }
@@ -144,7 +179,7 @@ export default class BattleScene extends Phaser.Scene {
     return x >= zone.x && x <= zone.x + zone.width && y >= 0 && y <= MAP_HEIGHT;
   }
 
-  private spawnPack(x: number, y: number, team: Team, type: UnitType) {
+  private spawnPack(x: number, y: number, team: Team, type: RegularUnitType | HeroUnitType | WarMachineType) {
     const startX = x - ((PACK_COLS - 1) * PACK_SPACING) / 2;
     const startY = y - ((PACK_ROWS - 1) * PACK_SPACING) / 2;
     const zone = this.getZoneForTeam(team);
@@ -160,34 +195,53 @@ export default class BattleScene extends Phaser.Scene {
     }
   }
 
-  private createUnit(x: number, y: number, team: Team, type: UnitType) {
-    const stats =
-      type === 'melee'
-        ? { attack: 8, defense: 4, hp: 34, speed: 45, range: 18, cooldown: 450 }
-        : {
-            attack: 6,
-            defense: 2,
-            hp: 26,
-            speed: 36,
-            range: 130,
-            cooldown: 700,
-          };
+  private createUnit(x: number, y: number, team: Team, type: RegularUnitType | HeroUnitType | WarMachineType) {
+    // Get combat stats from the data
+    const combatData = unitCombatStats[type as RegularUnitType | HeroUnitType];
+
+    if (!combatData) {
+      console.error(`No combat stats found for unit type: ${type}`);
+      return;
+    }
+
+    // Convert game stats to battle mechanics
+    // Speed: convert to pixels per second (multiply by scaling factor)
+    const pixelsPerSecond = combatData.speed * 20;
+
+    // Range: use rangeDamage range if available, otherwise melee range based on attack
+    const battleRange = combatData.range ? combatData.range * 5 : 18;
+
+    // Cooldown: ranged units are slower (based on range presence)
+    const cooldown = combatData.range ? 700 : 450;
 
     const id = this.nextUnitId;
     this.nextUnitId += 1;
-    const sprite = this.add.circle(x, y, type === 'melee' ? 5.4 : 5, TEAM_COLORS[team], 0.9);
+
+    // Determine color: use unit type color if available, otherwise team color
+    const unitColor = UNIT_TYPE_COLORS[type] ?? TEAM_COLORS[team];
+
+    // Determine size: heroes are larger, war machines even larger
+    const heroUnits = Object.values(HeroUnitName);
+    let unitSize = 5.4; // Default regular unit size
+    if (heroUnits.includes(type as HeroUnitType)) {
+      unitSize = 7; // Heroes are larger
+    } else if (['Ballista', 'Catapult', 'Battering Ram', 'Siege Tower'].includes(type)) {
+      unitSize = 9; // War machines are even larger
+    }
+
+    const sprite = this.add.circle(x, y, unitSize, unitColor, 0.9);
 
     const unit: Unit = {
       id,
       team,
       type,
-      attack: stats.attack,
-      defense: stats.defense,
-      hp: stats.hp,
-      maxHp: stats.hp,
-      speed: stats.speed,
-      range: stats.range,
-      cooldownMs: stats.cooldown,
+      attack: combatData.attack,
+      defense: combatData.defense,
+      hp: combatData.health,
+      maxHp: combatData.health,
+      speed: pixelsPerSecond,
+      range: battleRange,
+      cooldownMs: cooldown,
       lastAttackAt: 0,
       sprite,
     };
