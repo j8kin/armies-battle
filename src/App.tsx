@@ -3,7 +3,7 @@ import Phaser from 'phaser';
 import './App.css';
 import BattleScene from './game/BattleScene';
 import { HeroUnitName, RegularUnitName, WarMachineName } from './types/UnitType';
-import type { BattleStats, Team } from './game/BattleScene';
+import type { BattleStats, Team } from './game/battleTypes';
 import type { UnitType } from './types/UnitType';
 import type { SimulationResult } from './domain/battle/simulateBattle';
 
@@ -200,6 +200,9 @@ function App() {
             <li>Neutral ground spans the middle 10%.</li>
             <li>Defender controls the right 60% of the map.</li>
             <li>Click to drop a 20-unit pack at once.</li>
+            <li>Click a pack to preview its attack range (armed war machines only).</li>
+            <li>Drag a pack to reposition it.</li>
+            <li>Right-click a pack to remove it.</li>
           </ul>
         </aside>
       </main>
