@@ -1,10 +1,13 @@
 import Phaser from 'phaser';
 import { HeroUnitName, RegularUnitName, WarMachineName } from '../types/UnitType';
 import { unitCombatStats } from '../domain/army/unitRepository';
+import { calculateDamage, deriveBattleStats } from '../domain/battle/combatRules';
+import { simulateBattle } from '../domain/battle/simulateBattle';
 import type { UnitType, HeroUnitType, RegularUnitType, WarMachineType } from '../types/UnitType';
 import { isHeroType, isWarMachine, isRegularUnit } from '../domain/army/unitTypeChecks';
 import { calculateArmedWarMachineStats } from '../types/WarMachineArming';
 import type { ArmedWarMachine } from '../types/WarMachineArming';
+import type { SimulationResult } from '../domain/battle/simulateBattle';
 
 export type Phase = 'deploy' | 'battle';
 export type Team = 'attacker' | 'defender';
@@ -26,6 +29,7 @@ interface Unit {
   speed: number;
   range: number;
   rangeDamage?: number; // Damage dealt at range (for ranged units)
+  isRanged: boolean;
   cooldownMs: number;
   lastAttackAt: number;
   sprite: Phaser.GameObjects.Arc;
@@ -164,6 +168,57 @@ export default class BattleScene extends Phaser.Scene {
     this.emitStats();
   }
 
+  autoResolveBattle(): SimulationResult | null {
+    if (this.phase !== 'deploy') {
+      return null;
+    }
+
+    if (this.attackers.length === 0 || this.defenders.length === 0) {
+      return null;
+    }
+
+    const attackerTypes = new Set(this.attackers.map((unit) => unit.type));
+    const defenderTypes = new Set(this.defenders.map((unit) => unit.type));
+
+    if (attackerTypes.size !== 1 || defenderTypes.size !== 1) {
+      console.warn('Auto-resolve requires exactly one unit type per team.');
+      return null;
+    }
+
+    const [attackerType] = attackerTypes;
+    const [defenderType] = defenderTypes;
+
+    if (
+      this.attackers.some((unit) => isWarMachine(unit.type) && unit.armedWarMachine) ||
+      this.defenders.some((unit) => isWarMachine(unit.type) && unit.armedWarMachine)
+    ) {
+      console.warn('Auto-resolve does not support armed war machines yet.');
+      return null;
+    }
+
+    const result = simulateBattle({
+      attackerType,
+      defenderType,
+      attackerCount: this.attackers.length,
+      defenderCount: this.defenders.length,
+      startDistance: 300,
+      timeStepMs: 50,
+      maxDurationMs: 90_000,
+    });
+
+    this.resetBattle();
+    this.phase = 'battle';
+
+    if (result.winner === 'attacker') {
+      this.spawnUnitsForTeam('attacker', attackerType, result.remaining.attacker);
+    } else if (result.winner === 'defender') {
+      this.spawnUnitsForTeam('defender', defenderType, result.remaining.defender);
+    }
+
+    this.emitStats();
+    return result;
+  }
+
   resetBattle() {
     this.phase = 'deploy';
     this.units.forEach((unit) => unit.sprite.destroy());
@@ -240,6 +295,32 @@ export default class BattleScene extends Phaser.Scene {
     }
   }
 
+  private spawnUnitsForTeam(team: Team, type: UnitType, count: number) {
+    if (count <= 0) {
+      return;
+    }
+
+    const zone = this.getZoneForTeam(team);
+    const minX = zone.x + 18;
+    const maxX = zone.x + zone.width - 18;
+    const centerX = Phaser.Math.Clamp(zone.x + zone.width / 2, minX, maxX);
+    const centerY = MAP_HEIGHT / 2;
+
+    const isSingleUnit = isHeroType(type as HeroUnitType) || isWarMachine(type as WarMachineType);
+    const spacing = isSingleUnit ? 24 : PACK_SPACING;
+    const columns = isSingleUnit ? 1 : PACK_COLS;
+
+    for (let i = 0; i < count; i += 1) {
+      const row = Math.floor(i / columns);
+      const col = i % columns;
+      const offsetX = (col - (columns - 1) / 2) * spacing;
+      const offsetY = (row - 2) * spacing;
+      const x = Phaser.Math.Clamp(centerX + offsetX, minX, maxX);
+      const y = Phaser.Math.Clamp(centerY + offsetY, 10, MAP_HEIGHT - 10);
+      this.createUnit(x, y, team, type as RegularUnitType | HeroUnitType | WarMachineType);
+    }
+  }
+
   private createUnit(x: number, y: number, team: Team, type: RegularUnitType | HeroUnitType | WarMachineType) {
     // Get combat stats from the data
     const combatData = unitCombatStats[type as RegularUnitType | HeroUnitType];
@@ -250,14 +331,7 @@ export default class BattleScene extends Phaser.Scene {
     }
 
     // Convert game stats to battle mechanics
-    // Speed: convert to pixels per second (multiply by scaling factor)
-    const pixelsPerSecond = combatData.speed * 20;
-
-    // Range: use rangeDamage range if available, otherwise melee range based on attack
-    const battleRange = combatData.range ? combatData.range * 5 : 18;
-
-    // Cooldown: ranged units are slower (based on range presence)
-    const cooldown = combatData.range ? 700 : 450;
+    const derived = deriveBattleStats(combatData);
 
     const id = this.nextUnitId;
     this.nextUnitId += 1;
@@ -284,10 +358,11 @@ export default class BattleScene extends Phaser.Scene {
       defense: combatData.defense,
       hp: combatData.health,
       maxHp: combatData.health,
-      speed: pixelsPerSecond,
-      range: battleRange,
+      speed: derived.speed,
+      range: derived.range,
       rangeDamage: combatData.rangeDamage, // Store range damage for ranged units
-      cooldownMs: cooldown,
+      isRanged: derived.isRanged,
+      cooldownMs: derived.cooldownMs,
       lastAttackAt: 0,
       sprite,
     };
@@ -317,8 +392,8 @@ export default class BattleScene extends Phaser.Scene {
       }
 
       let target = unit.targetId ? this.units.get(unit.targetId) : undefined;
-      if (!target || target.hp <= 0) {
-        target = this.findNearestEnemy(unit, enemies);
+      if (!target || target.hp <= 0 || (this.isMeleeUnit(unit) && !this.isEnemyInFront(unit, target))) {
+        target = this.findPreferredEnemy(unit, enemies);
         unit.targetId = target?.id;
       }
 
@@ -334,12 +409,34 @@ export default class BattleScene extends Phaser.Scene {
         if (time - unit.lastAttackAt >= unit.cooldownMs) {
           this.resolveAttack(unit, target, time);
         }
+        const avoidance = this.getMeleeAvoidance(unit);
+        const steerLength = Math.hypot(avoidance.x, avoidance.y);
+        if (steerLength > 0.001) {
+          const moveDistance = (unit.speed * delta * 0.35) / 1000;
+          const moveX = avoidance.x / steerLength;
+          const moveY = avoidance.y / steerLength;
+          const nx = unit.sprite.x + moveX * moveDistance;
+          const ny = unit.sprite.y + moveY * moveDistance;
+          unit.sprite.setPosition(Phaser.Math.Clamp(nx, 6, MAP_WIDTH - 6), Phaser.Math.Clamp(ny, 6, MAP_HEIGHT - 6));
+        }
         continue;
       }
 
       const moveDistance = (unit.speed * delta) / 1000;
-      const nx = unit.sprite.x + (dx / distance) * moveDistance;
-      const ny = unit.sprite.y + (dy / distance) * moveDistance;
+      let moveX = dx / distance;
+      let moveY = dy / distance;
+
+      const avoidance = this.getMeleeAvoidance(unit);
+      const steerX = moveX + avoidance.x;
+      const steerY = moveY + avoidance.y;
+      const steerLength = Math.hypot(steerX, steerY);
+      if (steerLength > 0.001) {
+        moveX = steerX / steerLength;
+        moveY = steerY / steerLength;
+      }
+
+      const nx = unit.sprite.x + moveX * moveDistance;
+      const ny = unit.sprite.y + moveY * moveDistance;
       unit.sprite.setPosition(Phaser.Math.Clamp(nx, 6, MAP_WIDTH - 6), Phaser.Math.Clamp(ny, 6, MAP_HEIGHT - 6));
     }
   }
@@ -347,14 +444,7 @@ export default class BattleScene extends Phaser.Scene {
   private resolveAttack(attacker: Unit, target: Unit, time: number) {
     attacker.lastAttackAt = time;
 
-    // Use rangeDamage if the unit has ranged capability, otherwise use melee attack
-    const attackPower = attacker.rangeDamage !== undefined && attacker.rangeDamage > 0
-      ? attacker.rangeDamage
-      : attacker.attack;
-
-    const mitigation = target.defense * 0.45;
-    const rawDamage = attackPower - mitigation;
-    const damage = Math.max(1, Math.round(rawDamage));
+    const damage = calculateDamage(attacker, target);
     target.hp -= damage;
     target.sprite.setAlpha(Math.max(0.35, target.hp / target.maxHp));
 
@@ -385,6 +475,68 @@ export default class BattleScene extends Phaser.Scene {
     }
 
     return nearest;
+  }
+
+  private isMeleeUnit(unit: Unit) {
+    return !unit.isRanged;
+  }
+
+  private isEnemyInFront(unit: Unit, enemy: Unit) {
+    const forward = unit.team === 'attacker' ? enemy.sprite.x - unit.sprite.x : unit.sprite.x - enemy.sprite.x;
+    return forward >= -4;
+  }
+
+  private findPreferredEnemy(unit: Unit, enemies: Unit[]) {
+    if (!this.isMeleeUnit(unit)) {
+      return this.findNearestEnemy(unit, enemies);
+    }
+
+    let best: Unit | undefined;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    for (const enemy of enemies) {
+      if (enemy.hp <= 0) {
+        continue;
+      }
+      const forward = unit.team === 'attacker' ? enemy.sprite.x - unit.sprite.x : unit.sprite.x - enemy.sprite.x;
+      if (forward < 0) {
+        continue;
+      }
+      const lateral = Math.abs(enemy.sprite.y - unit.sprite.y);
+      const score = forward * 2 + lateral;
+      if (score < bestScore) {
+        bestScore = score;
+        best = enemy;
+      }
+    }
+
+    return best ?? this.findNearestEnemy(unit, enemies);
+  }
+
+  private getMeleeAvoidance(unit: Unit) {
+    const allies = unit.team === 'attacker' ? this.attackers : this.defenders;
+    let steerX = 0;
+    let steerY = 0;
+    const unitX = unit.sprite.x;
+    const unitY = unit.sprite.y;
+    const minDistance = unit.sprite.radius * 4;
+
+    for (const ally of allies) {
+      if (ally.id === unit.id || ally.hp <= 0) {
+        continue;
+      }
+      const dx = unitX - ally.sprite.x;
+      const dy = unitY - ally.sprite.y;
+      const distance = Math.hypot(dx, dy);
+      if (distance <= 0.001 || distance >= minDistance) {
+        continue;
+      }
+      const push = (minDistance - distance) / minDistance;
+      steerX += (dx / distance) * push;
+      steerY += (dy / distance) * push;
+    }
+
+    return { x: steerX, y: steerY };
   }
 
   /**
@@ -440,17 +592,16 @@ export default class BattleScene extends Phaser.Scene {
     this.units.forEach((unit) => {
       if (unit.type === clickedUnit.type && unit.team === clickedUnit.team) {
         const distance = Phaser.Math.Distance.Between(
-            clickedUnit.sprite.x,
-            clickedUnit.sprite.y,
-            unit.sprite.x,
-            unit.sprite.y
+          clickedUnit.sprite.x,
+          clickedUnit.sprite.y,
+          unit.sprite.x,
+          unit.sprite.y,
         );
         if (distance <= packRadius) {
           pack.push(unit);
         }
       }
-    })
-
+    });
 
     return pack;
   }
@@ -597,7 +748,7 @@ export default class BattleScene extends Phaser.Scene {
       ZONE_ATTACKER.width,
       MAP_HEIGHT,
       0x132a4e,
-      0.35
+      0.35,
     );
     this.add.rectangle(
       ZONE_NEUTRAL.x + ZONE_NEUTRAL.width / 2,
@@ -605,7 +756,7 @@ export default class BattleScene extends Phaser.Scene {
       ZONE_NEUTRAL.width,
       MAP_HEIGHT,
       0x2f3640,
-      0.2
+      0.2,
     );
     this.add.rectangle(
       ZONE_DEFENDER.x + ZONE_DEFENDER.width / 2,
@@ -613,7 +764,7 @@ export default class BattleScene extends Phaser.Scene {
       ZONE_DEFENDER.width,
       MAP_HEIGHT,
       0x4a1e21,
-      0.35
+      0.35,
     );
 
     const labelStyle = {

@@ -18,7 +18,7 @@ export const unitCombatStats: Record<RegularUnitType | HeroUnitType | WarMachine
     speed: 2,
   },
   [RegularUnitName.WARRIOR]: {
-    attack: 8,
+    attack: 15,
     defense: 6,
     health: 25,
     speed: 2,

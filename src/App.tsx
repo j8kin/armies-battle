@@ -5,6 +5,7 @@ import BattleScene from './game/BattleScene';
 import { HeroUnitName, RegularUnitName, WarMachineName } from './types/UnitType';
 import type { BattleStats, Team } from './game/BattleScene';
 import type { UnitType } from './types/UnitType';
+import type { SimulationResult } from './domain/battle/simulateBattle';
 
 const PHASER_WIDTH = 1200;
 const PHASER_HEIGHT = 700;
@@ -19,6 +20,7 @@ function App() {
   });
   const [deployTeam, setDeployTeam] = useState<Team>('attacker');
   const [deployUnitType, setDeployUnitType] = useState<UnitType>(RegularUnitName.WARRIOR);
+  const [autoResolveResult, setAutoResolveResult] = useState<SimulationResult | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -63,12 +65,19 @@ function App() {
 
   const startBattle = () => {
     sceneRef.current?.startBattle();
+    setAutoResolveResult(null);
+  };
+
+  const autoResolve = () => {
+    const result = sceneRef.current?.autoResolveBattle() ?? null;
+    setAutoResolveResult(result);
   };
 
   const resetBattle = () => {
     sceneRef.current?.resetBattle();
     setDeployTeam('attacker');
     setDeployUnitType(RegularUnitName.WARRIOR);
+    setAutoResolveResult(null);
   };
 
   return (
@@ -90,6 +99,10 @@ function App() {
           <div>
             <span>Defender</span>
             <strong>{stats.defender}</strong>
+          </div>
+          <div>
+            <span>Auto-resolve</span>
+            <strong>{autoResolveResult ? autoResolveResult.winner : '—'}</strong>
           </div>
         </div>
       </header>
@@ -167,6 +180,9 @@ function App() {
           <div className="button-row">
             <button type="button" onClick={startBattle}>
               Start battle
+            </button>
+            <button type="button" onClick={autoResolve}>
+              Auto-resolve
             </button>
             <button type="button" onClick={resetBattle}>
               Reset field
