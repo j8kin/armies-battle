@@ -1,5 +1,5 @@
-import { HeroUnitName, RegularUnitName } from '../../types/UnitType';
-import type { HeroUnitType, RegularUnitType } from '../../types/UnitType';
+import { HeroUnitName, RegularUnitName, WarMachineName } from '../../types/UnitType';
+import type { HeroUnitType, RegularUnitType, WarMachineType } from '../../types/UnitType';
 
 export interface CombatStats {
   attack: number;
@@ -10,7 +10,7 @@ export interface CombatStats {
   rangeDamage?: number;
 }
 
-export const unitCombatStats: Record<RegularUnitType | HeroUnitType, CombatStats> = {
+export const unitCombatStats: Record<RegularUnitType | HeroUnitType | WarMachineType, CombatStats> = {
   [RegularUnitName.WARD_HANDS]: {
     attack: 5,
     defense: 3,
@@ -181,5 +181,31 @@ export const unitCombatStats: Record<RegularUnitType | HeroUnitType, CombatStats
     rangeDamage: 35,
     health: 15,
     speed: 2,
+  },
+  // WAR MACHINES - Base stats for unarmed war machines (minimal effectiveness)
+  // War machines must be armed with a melee unit to become effective
+  [WarMachineName.BALLISTA]: {
+    attack: 1,
+    defense: 10,
+    health: 50,
+    speed: 1,
+  },
+  [WarMachineName.CATAPULT]: {
+    attack: 1,
+    defense: 10,
+    health: 50,
+    speed: 1,
+  },
+  [WarMachineName.BATTERING_RAM]: {
+    attack: 1,
+    defense: 15,
+    health: 60,
+    speed: 1,
+  },
+  [WarMachineName.SIEGE_TOWER]: {
+    attack: 1,
+    defense: 20,
+    health: 70,
+    speed: 1,
   },
 };

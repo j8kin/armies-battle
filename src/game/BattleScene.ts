@@ -2,7 +2,9 @@ import Phaser from 'phaser';
 import { HeroUnitName, RegularUnitName, WarMachineName } from '../types/UnitType';
 import { unitCombatStats } from '../domain/army/unitRepository';
 import type { UnitType, HeroUnitType, RegularUnitType, WarMachineType } from '../types/UnitType';
-import { isHeroType, isWarMachine } from '../domain/army/unitTypeChecks';
+import { isHeroType, isWarMachine, isRegularUnit } from '../domain/army/unitTypeChecks';
+import { calculateArmedWarMachineStats } from '../types/WarMachineArming';
+import type { ArmedWarMachine } from '../types/WarMachineArming';
 
 export type Phase = 'deploy' | 'battle';
 export type Team = 'attacker' | 'defender';
@@ -23,10 +25,12 @@ interface Unit {
   maxHp: number;
   speed: number;
   range: number;
+  rangeDamage?: number; // Damage dealt at range (for ranged units)
   cooldownMs: number;
   lastAttackAt: number;
   sprite: Phaser.GameObjects.Arc;
   targetId?: number;
+  armedWarMachine?: ArmedWarMachine; // If this is a war machine, stores arming info
 }
 
 const MAP_WIDTH = 1200;
@@ -89,6 +93,9 @@ export default class BattleScene extends Phaser.Scene {
   private nextUnitId = 1;
   private statsTimer?: Phaser.Time.TimerEvent;
   private onStats?: (stats: BattleStats) => void;
+  // Arming mode state
+  private armingMode: boolean = false;
+  private warMachineToArm?: Unit;
 
   constructor() {
     super('BattleScene');
@@ -100,6 +107,22 @@ export default class BattleScene extends Phaser.Scene {
       if (this.phase !== 'deploy') {
         return;
       }
+
+      // Check if clicking on an existing unit (for arming war machines)
+      const clickedUnit = this.findUnitAtPosition(pointer.x, pointer.y);
+      if (clickedUnit) {
+        this.handleUnitClick(pointer.x, pointer.y);
+        return;
+      }
+
+      // If in arming mode but didn't click a unit, exit arming mode
+      if (this.armingMode && this.warMachineToArm) {
+        this.armingMode = false;
+        this.restoreWarMachineColor(this.warMachineToArm);
+        this.warMachineToArm = undefined;
+        return;
+      }
+
       const zone = this.getZoneForTeam(this.deployTeam);
       if (!this.pointInZone(pointer.x, pointer.y, zone)) {
         return;
@@ -148,6 +171,8 @@ export default class BattleScene extends Phaser.Scene {
     this.attackers = [];
     this.defenders = [];
     this.nextUnitId = 1;
+    this.armingMode = false;
+    this.warMachineToArm = undefined;
     this.emitStats();
   }
 
@@ -261,6 +286,7 @@ export default class BattleScene extends Phaser.Scene {
       maxHp: combatData.health,
       speed: pixelsPerSecond,
       range: battleRange,
+      rangeDamage: combatData.rangeDamage, // Store range damage for ranged units
       cooldownMs: cooldown,
       lastAttackAt: 0,
       sprite,
@@ -320,8 +346,14 @@ export default class BattleScene extends Phaser.Scene {
 
   private resolveAttack(attacker: Unit, target: Unit, time: number) {
     attacker.lastAttackAt = time;
+
+    // Use rangeDamage if the unit has ranged capability, otherwise use melee attack
+    const attackPower = attacker.rangeDamage !== undefined && attacker.rangeDamage > 0
+      ? attacker.rangeDamage
+      : attacker.attack;
+
     const mitigation = target.defense * 0.45;
-    const rawDamage = attacker.attack - mitigation;
+    const rawDamage = attackPower - mitigation;
     const damage = Math.max(1, Math.round(rawDamage));
     target.hp -= damage;
     target.sprite.setAlpha(Math.max(0.35, target.hp / target.maxHp));
@@ -353,6 +385,209 @@ export default class BattleScene extends Phaser.Scene {
     }
 
     return nearest;
+  }
+
+  /**
+   * Find a unit at the given position (with larger click radius for easier selection)
+   */
+  private findUnitAtPosition(x: number, y: number): Unit | undefined {
+    const units = Array.from(this.units.values());
+    // Check larger units first (war machines, then heroes, then regular)
+    const sortedUnits = units.sort((a, b) => {
+      const aIsWarMachine = isWarMachine(a.type);
+      const bIsWarMachine = isWarMachine(b.type);
+      if (aIsWarMachine && !bIsWarMachine) return -1;
+      if (!aIsWarMachine && bIsWarMachine) return 1;
+
+      const aIsHero = isHeroType(a.type);
+      const bIsHero = isHeroType(b.type);
+      if (aIsHero && !bIsHero) return -1;
+      if (!aIsHero && bIsHero) return 1;
+
+      return 0;
+    });
+
+    for (const unit of sortedUnits) {
+      const distance = Phaser.Math.Distance.Between(x, y, unit.sprite.x, unit.sprite.y);
+      // Use a larger click radius for easier selection (2x the visual radius)
+      const clickRadius = unit.sprite.radius * 2;
+      if (distance <= clickRadius) {
+        return unit;
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Find all units in a pack (units of the same type and team within close proximity)
+   */
+  private findPackAtPosition(x: number, y: number): Unit[] {
+    const clickedUnit = this.findUnitAtPosition(x, y);
+    if (!clickedUnit) {
+      return [];
+    }
+
+    // If it's a hero or war machine (single unit), return just that unit
+    if (isHeroType(clickedUnit.type) || isWarMachine(clickedUnit.type)) {
+      return [clickedUnit];
+    }
+
+    // Find all units of the same type and team within a pack radius
+    const packRadius = 100; // Units within this radius are considered part of the same pack
+    const pack: Unit[] = [];
+
+    this.units.forEach((unit) => {
+      if (unit.type === clickedUnit.type && unit.team === clickedUnit.team) {
+        const distance = Phaser.Math.Distance.Between(
+            clickedUnit.sprite.x,
+            clickedUnit.sprite.y,
+            unit.sprite.x,
+            unit.sprite.y
+        );
+        if (distance <= packRadius) {
+          pack.push(unit);
+        }
+      }
+    })
+
+
+    return pack;
+  }
+
+  /**
+   * Handle clicking on a unit/pack (for arming war machines)
+   */
+  private handleUnitClick(x: number, y: number) {
+    const unit = this.findUnitAtPosition(x, y);
+    if (!unit) {
+      return;
+    }
+
+    // If in arming mode, try to arm the war machine with a pack
+    if (this.armingMode && this.warMachineToArm) {
+      const pack = this.findPackAtPosition(x, y);
+      this.armWarMachine(this.warMachineToArm, pack);
+      this.armingMode = false;
+      this.warMachineToArm = undefined;
+      return;
+    }
+
+    // If clicking on an unarmed war machine, enter arming mode
+    if (isWarMachine(unit.type) && !unit.armedWarMachine) {
+      this.armingMode = true;
+      this.warMachineToArm = unit;
+      // Highlight the war machine with a pulsing effect
+      this.highlightWarMachineForArming(unit);
+      console.log(`War machine selected for arming. Click on a melee unit pack to arm it.`);
+    }
+  }
+
+  /**
+   * Arm a war machine with a pack of regular melee units
+   */
+  private armWarMachine(warMachine: Unit, armingPack: Unit[]) {
+    if (armingPack.length === 0) {
+      console.log('No units found to arm the war machine');
+      this.restoreWarMachineColor(warMachine);
+      return;
+    }
+
+    const firstUnit = armingPack[0];
+
+    // Validate: only regular melee units can arm war machines
+    if (!isRegularUnit(firstUnit.type)) {
+      console.log('Only regular units can arm war machines');
+      this.restoreWarMachineColor(warMachine);
+      return;
+    }
+
+    // Check if the unit is ranged (has range stat)
+    const armingUnitStats = unitCombatStats[firstUnit.type];
+    if (armingUnitStats.range && armingUnitStats.range > 0) {
+      console.log('Ranged units cannot arm war machines. Only melee units are allowed.');
+      this.restoreWarMachineColor(warMachine);
+      return;
+    }
+
+    // Validate pack size - must have at least PACK_SIZE units
+    if (armingPack.length < PACK_SIZE) {
+      console.log(`Not enough units! Need ${PACK_SIZE} units to arm a war machine, found ${armingPack.length}`);
+      this.restoreWarMachineColor(warMachine);
+      return;
+    }
+
+    // Calculate armed stats based on the unit type
+    const armedStats = calculateArmedWarMachineStats(armingUnitStats);
+
+    // Update the war machine
+    warMachine.armedWarMachine = {
+      armedWith: firstUnit.type,
+      combatStats: armedStats,
+    };
+
+    // Apply the new stats
+    warMachine.attack = armedStats.attack;
+    warMachine.defense = armedStats.defense;
+    warMachine.maxHp = armedStats.health;
+    warMachine.hp = armedStats.health;
+    warMachine.speed = armedStats.speed * 20; // Convert to pixels per second
+    warMachine.range = (armedStats.range ?? 18) * 5;
+    warMachine.rangeDamage = armedStats.rangeDamage; // Store the range damage!
+    warMachine.cooldownMs = 700; // Ranged cooldown
+
+    // Update visual to show it's armed (use a golden border effect)
+    this.updateArmedWarMachineVisual(warMachine);
+
+    // Remove all units in the pack (up to PACK_SIZE)
+    const unitsToRemove = armingPack.slice(0, PACK_SIZE);
+    for (const unit of unitsToRemove) {
+      unit.sprite.destroy();
+      this.units.delete(unit.id);
+      if (unit.team === 'attacker') {
+        this.attackers = this.attackers.filter((u) => u.id !== unit.id);
+      } else {
+        this.defenders = this.defenders.filter((u) => u.id !== unit.id);
+      }
+    }
+
+    console.log(`War machine armed with ${PACK_SIZE} ${firstUnit.type} units!`);
+    this.emitStats();
+  }
+
+  /**
+   * Highlight a war machine when entering arming mode
+   */
+  private highlightWarMachineForArming(warMachine: Unit) {
+    // Add a yellow tint to indicate selection
+    warMachine.sprite.setStrokeStyle(3, 0xffff00, 1);
+  }
+
+  /**
+   * Restore the war machine's original color
+   */
+  private restoreWarMachineColor(warMachine: Unit) {
+    warMachine.sprite.setStrokeStyle(0);
+  }
+
+  /**
+   * Update visual appearance of an armed war machine
+   */
+  private updateArmedWarMachineVisual(warMachine: Unit) {
+    // Remove selection highlight
+    warMachine.sprite.setStrokeStyle(0);
+
+    // Add a golden/orange border to show it's armed
+    warMachine.sprite.setStrokeStyle(2, 0xffa500, 1);
+
+    // Get the unit color for the armed unit type
+    if (warMachine.armedWarMachine) {
+      const armedUnitColor = UNIT_TYPE_COLORS[warMachine.armedWarMachine.armedWith];
+      if (armedUnitColor) {
+        // Blend the war machine color with the armed unit color
+        warMachine.sprite.setFillStyle(armedUnitColor, 0.9);
+      }
+    }
   }
 
   private drawZones() {

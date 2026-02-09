@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import Phaser from 'phaser';
 import './App.css';
 import BattleScene from './game/BattleScene';
-import { HeroUnitName, RegularUnitName } from './types/UnitType';
+import { HeroUnitName, RegularUnitName, WarMachineName } from './types/UnitType';
 import type { BattleStats, Team } from './game/BattleScene';
 import type { UnitType } from './types/UnitType';
 
@@ -134,6 +134,22 @@ function App() {
           <span>Hero Units</span>
           <div className="button-row" style={{ flexWrap: 'wrap', gap: '4px' }}>
             {Object.values(HeroUnitName).map((unitName) => (
+              <button
+                key={unitName}
+                type="button"
+                className={deployUnitType === unitName ? 'is-active' : ''}
+                onClick={() => setDeployUnitType(unitName)}
+                style={{ fontSize: '12px', padding: '4px 8px' }}
+              >
+                {unitName}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="control-group">
+          <span>War Machines</span>
+          <div className="button-row" style={{ flexWrap: 'wrap', gap: '4px' }}>
+            {Object.values(WarMachineName).map((unitName) => (
               <button
                 key={unitName}
                 type="button"
