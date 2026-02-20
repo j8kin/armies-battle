@@ -116,7 +116,7 @@ export default class DeployManager {
         }
 
         this.selectPack(pack);
-      },
+      }
     );
 
     this.scene.input.on('dragstart', (_pointer: Phaser.Input.Pointer, gameObject: Phaser.GameObjects.GameObject) => {
@@ -152,7 +152,7 @@ export default class DeployManager {
         if (this.selectedPackId === pack.id) {
           this.updateRangeIndicator(pack);
         }
-      },
+      }
     );
   }
 

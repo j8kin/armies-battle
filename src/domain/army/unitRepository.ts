@@ -86,38 +86,38 @@ export const unitCombatStats: Record<RegularUnitType | HeroUnitType | WarMachine
   // HEROES
   // Human warrior hero
   [HeroUnitName.WARSMITH]: {
-    attack: 30,
+    attack: 35,
     defense: 3,
-    range: 2,
-    rangeDamage: 30,
-    health: 18,
-    speed: 4,
+    range: 4,
+    rangeDamage: 35,
+    health: 25,
+    speed: 6,
   },
   [HeroUnitName.FIGHTER]: {
-    attack: 30,
+    attack: 35,
     defense: 3,
-    range: 2,
-    rangeDamage: 30,
-    health: 18,
-    speed: 4,
+    range: 4,
+    rangeDamage: 35,
+    health: 25,
+    speed: 6,
   },
   // Dwarf hero
   [HeroUnitName.HAMMER_LORD]: {
-    attack: 40,
-    defense: 3,
-    range: 2,
-    rangeDamage: 40,
-    health: 25,
-    speed: 4,
+    attack: 45,
+    defense: 15,
+    range: 6,
+    rangeDamage: 50,
+    health: 40,
+    speed: 8,
   },
   // Orc hero
   [HeroUnitName.OGR]: {
-    attack: 40,
+    attack: 50,
     defense: 4,
-    range: 2,
-    rangeDamage: 45,
-    health: 30,
-    speed: 3,
+    range: 4,
+    rangeDamage: 55,
+    health: 35,
+    speed: 5,
   },
   // Elf hero
   [HeroUnitName.SHADOW_BLADE]: {
@@ -150,19 +150,19 @@ export const unitCombatStats: Record<RegularUnitType | HeroUnitType | WarMachine
   [HeroUnitName.CLERIC]: {
     attack: 25,
     defense: 5,
-    range: 2,
+    range: 5,
     rangeDamage: 25,
-    health: 20,
-    speed: 2,
+    health: 22,
+    speed: 3,
   },
   // Druid - produce green mana
   [HeroUnitName.DRUID]: {
     attack: 20,
     defense: 4,
-    range: 2,
+    range: 6,
     rangeDamage: 20,
-    health: 22,
-    speed: 3,
+    health: 25,
+    speed: 4,
   },
   // Enchanter - produce blue mana
   [HeroUnitName.ENCHANTER]: {

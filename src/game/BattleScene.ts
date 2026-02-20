@@ -57,7 +57,7 @@ export default class BattleScene extends Phaser.Scene {
     this.deployManager = new DeployManager(
       this,
       () => this.phase,
-      () => this.emitStats(),
+      () => this.emitStats()
     );
     this.deployManager.initialize();
 
@@ -220,7 +220,7 @@ export default class BattleScene extends Phaser.Scene {
     y: number,
     team: Team,
     type: RegularUnitType | HeroUnitType | WarMachineType,
-    armedWarMachine?: ArmedWarMachine,
+    armedWarMachine?: ArmedWarMachine
   ) {
     // Get combat stats from the data
     const combatData = unitCombatStats[type as RegularUnitType | HeroUnitType | WarMachineType];
@@ -310,15 +310,29 @@ export default class BattleScene extends Phaser.Scene {
         if (time - unit.lastAttackAt >= unit.cooldownMs) {
           this.resolveAttack(unit, target, time);
         }
-        const avoidance = this.getMeleeAvoidance(unit);
-        const steerLength = Math.hypot(avoidance.x, avoidance.y);
-        if (steerLength > 0.001) {
-          const moveDistance = (unit.speed * delta * 0.35) / 1000;
-          const moveX = avoidance.x / steerLength;
-          const moveY = avoidance.y / steerLength;
-          const nx = unit.sprite.x + moveX * moveDistance;
-          const ny = unit.sprite.y + moveY * moveDistance;
+        if (this.shouldHitAndRun(unit, target, distance)) {
+          const retreatDistance = (unit.speed * delta) / 1000;
+          const retreat = this.getHitAndRunDirection(unit, target, enemies);
+          const avoidance = this.getMeleeAvoidance(unit);
+          const steerX = retreat.x + avoidance.x;
+          const steerY = retreat.y + avoidance.y;
+          const steerLength = Math.hypot(steerX, steerY);
+          const moveX = steerLength > 0.001 ? steerX / steerLength : retreat.x;
+          const moveY = steerLength > 0.001 ? steerY / steerLength : retreat.y;
+          const nx = unit.sprite.x + moveX * retreatDistance;
+          const ny = unit.sprite.y + moveY * retreatDistance;
           unit.sprite.setPosition(Phaser.Math.Clamp(nx, 6, MAP_WIDTH - 6), Phaser.Math.Clamp(ny, 6, MAP_HEIGHT - 6));
+        } else {
+          const avoidance = this.getMeleeAvoidance(unit);
+          const steerLength = Math.hypot(avoidance.x, avoidance.y);
+          if (steerLength > 0.001) {
+            const moveDistance = (unit.speed * delta * 0.35) / 1000;
+            const moveX = avoidance.x / steerLength;
+            const moveY = avoidance.y / steerLength;
+            const nx = unit.sprite.x + moveX * moveDistance;
+            const ny = unit.sprite.y + moveY * moveDistance;
+            unit.sprite.setPosition(Phaser.Math.Clamp(nx, 6, MAP_WIDTH - 6), Phaser.Math.Clamp(ny, 6, MAP_HEIGHT - 6));
+          }
         }
         continue;
       }
@@ -328,8 +342,10 @@ export default class BattleScene extends Phaser.Scene {
       let moveY = dy / distance;
 
       const avoidance = this.getMeleeAvoidance(unit);
-      const steerX = moveX + avoidance.x;
-      const steerY = moveY + avoidance.y;
+      const allies = unit.team === 'attacker' ? this.attackers : this.defenders;
+      const bypass = this.getAllyBypassSteer(unit, target, allies);
+      const steerX = moveX * bypass.forwardScale + avoidance.x + bypass.x;
+      const steerY = moveY * bypass.forwardScale + avoidance.y + bypass.y;
       const steerLength = Math.hypot(steerX, steerY);
       if (steerLength > 0.001) {
         moveX = steerX / steerLength;
@@ -387,6 +403,77 @@ export default class BattleScene extends Phaser.Scene {
     return forward >= -4;
   }
 
+  private shouldHitAndRun(unit: Unit, target: Unit, distance: number) {
+    if (!unit.isRanged) {
+      return false;
+    }
+    const preferredDistance = unit.range * 0.85;
+    if (distance >= preferredDistance) {
+      return false;
+    }
+    return unit.speed > target.speed;
+  }
+
+  private getHitAndRunDirection(unit: Unit, target: Unit, enemies: Unit[]) {
+    const dx = unit.sprite.x - target.sprite.x;
+    const dy = unit.sprite.y - target.sprite.y;
+    const distance = Math.hypot(dx, dy) || 1;
+    const awayX = dx / distance;
+    const awayY = dy / distance;
+    const towardX = -awayX;
+    const towardY = -awayY;
+    const leftX = -awayY;
+    const leftY = awayX;
+    const rightX = awayY;
+    const rightY = -awayX;
+    const candidates = [
+      { x: awayX, y: awayY },
+      { x: towardX, y: towardY },
+      { x: leftX, y: leftY },
+      { x: rightX, y: rightY },
+      { x: (awayX + leftX) * 0.7071, y: (awayY + leftY) * 0.7071 },
+      { x: (awayX + rightX) * 0.7071, y: (awayY + rightY) * 0.7071 },
+      { x: (towardX + leftX) * 0.7071, y: (towardY + leftY) * 0.7071 },
+      { x: (towardX + rightX) * 0.7071, y: (towardY + rightY) * 0.7071 },
+    ];
+    const probeDistance = Math.max(18, unit.range * 0.6);
+    let best = candidates[0];
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const candidate of candidates) {
+      const probeX = unit.sprite.x + candidate.x * probeDistance;
+      const probeY = unit.sprite.y + candidate.y * probeDistance;
+      let threat = 0;
+      for (const enemy of enemies) {
+        if (enemy.hp <= 0) {
+          continue;
+        }
+        const dist = Phaser.Math.Distance.Between(probeX, probeY, enemy.sprite.x, enemy.sprite.y);
+        if (dist <= probeDistance) {
+          threat += (probeDistance - dist) / probeDistance;
+        }
+      }
+      const edgeMargin = 18;
+      const edgePenaltyX =
+        probeX < edgeMargin
+          ? (edgeMargin - probeX) / edgeMargin
+          : probeX > MAP_WIDTH - edgeMargin
+            ? (probeX - (MAP_WIDTH - edgeMargin)) / edgeMargin
+            : 0;
+      const edgePenaltyY =
+        probeY < edgeMargin
+          ? (edgeMargin - probeY) / edgeMargin
+          : probeY > MAP_HEIGHT - edgeMargin
+            ? (probeY - (MAP_HEIGHT - edgeMargin)) / edgeMargin
+            : 0;
+      const score = threat + edgePenaltyX + edgePenaltyY;
+      if (score < bestScore) {
+        bestScore = score;
+        best = candidate;
+      }
+    }
+    return best;
+  }
+
   private findPreferredEnemy(unit: Unit, enemies: Unit[]) {
     if (!this.isMeleeUnit(unit)) {
       return this.findNearestEnemy(unit, enemies);
@@ -440,6 +527,70 @@ export default class BattleScene extends Phaser.Scene {
     return { x: steerX, y: steerY };
   }
 
+  private getAllyBypassSteer(unit: Unit, target: Unit, allies: Unit[]) {
+    const dx = target.sprite.x - unit.sprite.x;
+    const dy = target.sprite.y - unit.sprite.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance < 0.001) {
+      return { x: 0, y: 0, forwardScale: 1 };
+    }
+
+    const forwardX = dx / distance;
+    const forwardY = dy / distance;
+    const rightX = forwardY;
+    const rightY = -forwardX;
+    const blockDistance = Math.max(18, unit.sprite.radius * 6);
+    const laneWidth = Math.max(10, unit.sprite.radius * 3);
+    let blockers = 0;
+    let leftScore = 0;
+    let rightScore = 0;
+
+    for (const ally of allies) {
+      if (ally.id === unit.id || ally.hp <= 0) {
+        continue;
+      }
+      const ax = ally.sprite.x - unit.sprite.x;
+      const ay = ally.sprite.y - unit.sprite.y;
+      const forwardDot = ax * forwardX + ay * forwardY;
+      if (forwardDot <= 0 || forwardDot > blockDistance) {
+        continue;
+      }
+      const lateral = ax * rightX + ay * rightY;
+      if (Math.abs(lateral) > laneWidth) {
+        continue;
+      }
+      blockers += 1;
+      if (lateral >= 0) {
+        rightScore += 1;
+      } else {
+        leftScore += 1;
+      }
+    }
+
+    if (blockers === 0) {
+      return { x: 0, y: 0, forwardScale: 1 };
+    }
+
+    let steerDir = leftScore <= rightScore ? -1 : 1;
+    const probeDistance = Math.max(12, unit.sprite.radius * 5);
+    const probeX = unit.sprite.x + rightX * steerDir * probeDistance;
+    const probeY = unit.sprite.y + rightY * steerDir * probeDistance;
+    const edgeMargin = 16;
+    if (
+      probeX < edgeMargin ||
+      probeX > MAP_WIDTH - edgeMargin ||
+      probeY < edgeMargin ||
+      probeY > MAP_HEIGHT - edgeMargin
+    ) {
+      steerDir *= -1;
+    }
+
+    const congestion = Math.min(1, blockers / 3);
+    const bypassStrength = 0.85 + congestion * 0.45;
+    const forwardScale = 0.55 - congestion * 0.2;
+    return { x: rightX * steerDir * bypassStrength, y: rightY * steerDir * bypassStrength, forwardScale };
+  }
+
   private applyArmedWarMachineStats(unit: Unit, armedWarMachine: ArmedWarMachine) {
     const armedStats = armedWarMachine.combatStats;
     const derived = deriveBattleStats(armedStats);
@@ -481,7 +632,7 @@ export default class BattleScene extends Phaser.Scene {
       ZONE_ATTACKER.width,
       MAP_HEIGHT,
       0x132a4e,
-      0.35,
+      0.35
     );
     this.add.rectangle(
       ZONE_NEUTRAL.x + ZONE_NEUTRAL.width / 2,
@@ -489,7 +640,7 @@ export default class BattleScene extends Phaser.Scene {
       ZONE_NEUTRAL.width,
       MAP_HEIGHT,
       0x2f3640,
-      0.2,
+      0.2
     );
     this.add.rectangle(
       ZONE_DEFENDER.x + ZONE_DEFENDER.width / 2,
@@ -497,7 +648,7 @@ export default class BattleScene extends Phaser.Scene {
       ZONE_DEFENDER.width,
       MAP_HEIGHT,
       0x4a1e21,
-      0.35,
+      0.35
     );
 
     const labelStyle = {

@@ -1,4 +1,5 @@
 import { unitCombatStats } from '../army/unitRepository';
+import { isHeroType } from '../army/unitTypeChecks';
 import { RegularUnitName } from '../../types/UnitType';
 import type { UnitType } from '../../types/UnitType';
 import { calculateDamage, deriveBattleStats } from './combatRules';
@@ -64,7 +65,7 @@ const buildUnit = (type: UnitType, team: Team, id: number, x: number): SimUnit =
     rangeDamage: stats.rangeDamage,
     isRanged: derived.isRanged,
     cooldownMs: derived.cooldownMs,
-    lastAttackAt: 0,
+    lastAttackAt: -derived.cooldownMs,
     x,
   };
 };
@@ -93,6 +94,17 @@ const applyAttack = (attacker: SimUnit, target: SimUnit, time: number) => {
   target.hp -= damage;
 };
 
+const shouldHitAndRun = (unit: SimUnit, target: SimUnit, distance: number) => {
+  if (!unit.isRanged && !isHeroType(unit.type)) {
+    return false;
+  }
+  const preferredDistance = unit.range * 0.85;
+  if (distance >= preferredDistance) {
+    return false;
+  }
+  return unit.speed > target.speed;
+};
+
 const stepUnit = (unit: SimUnit, enemies: SimUnit[], time: number, deltaMs: number) => {
   if (unit.hp <= 0) {
     return;
@@ -104,17 +116,29 @@ const stepUnit = (unit: SimUnit, enemies: SimUnit[], time: number, deltaMs: numb
   }
 
   const distance = Math.abs(target.x - unit.x);
+  const moveDistance = (unit.speed * deltaMs) / 1000;
 
   if (distance <= unit.range) {
     if (time - unit.lastAttackAt >= unit.cooldownMs) {
       applyAttack(unit, target, time);
     }
+
+    if (shouldHitAndRun(unit, target, distance)) {
+      const direction = Math.sign(unit.x - target.x);
+      unit.x += direction * moveDistance;
+    }
     return;
   }
 
-  const moveDistance = (unit.speed * deltaMs) / 1000;
   const direction = Math.sign(target.x - unit.x);
-  unit.x += direction * moveDistance;
+  // If hit and run, try to stop at the edge of range
+  const isHitAndRunType = unit.isRanged || isHeroType(unit.type);
+  const targetDistance = isHitAndRunType ? unit.range : 0;
+
+  if (distance > targetDistance) {
+    const actualMove = Math.min(moveDistance, distance - targetDistance);
+    unit.x += direction * actualMove;
+  }
 };
 
 const createPack = (type: UnitType, team: Team, packSize: number, startX: number, startId: number) => {

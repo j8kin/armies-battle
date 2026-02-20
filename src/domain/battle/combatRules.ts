@@ -35,7 +35,7 @@ export const deriveBattleStats = (stats: CombatStats): BattleDerivedStats => {
     speed: speedToPixelsPerSecond(stats.speed),
     range,
     isRanged,
-    cooldownMs: stats.range ? RANGED_COOLDOWN_MS : MELEE_COOLDOWN_MS,
+    cooldownMs: isRanged ? RANGED_COOLDOWN_MS : MELEE_COOLDOWN_MS,
   };
 };
 
