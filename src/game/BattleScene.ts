@@ -1,12 +1,8 @@
 import Phaser from 'phaser';
-import { unitCombatStats } from '../domain/army/unitRepository';
+import DeployManager from './DeployManager';
 import { calculateDamage, deriveBattleStats } from '../domain/battle/combatRules';
 import { simulateBattle } from '../domain/battle/simulateBattle';
-import type { UnitType, HeroUnitType, RegularUnitType, WarMachineType } from '../types/UnitType';
-import type { ArmedWarMachine } from '../types/WarMachineArming';
-import type { SimulationResult } from '../domain/battle/simulateBattle';
 import { isHeroType, isWarMachine } from '../domain/army/unitTypeChecks';
-import DeployManager from './DeployManager';
 import {
   MAP_HEIGHT,
   MAP_WIDTH,
@@ -16,8 +12,13 @@ import {
   ZONE_DEFENDER,
   ZONE_NEUTRAL,
 } from './battleConfig';
-import type { BattleStats, Phase, Team } from './battleTypes';
+import { unitCombatStats } from '../domain/army/unitRepository';
 import { TEAM_COLORS, UNIT_TYPE_COLORS } from './unitVisuals';
+import type { BattleStats, Phase, Team } from './battleTypes';
+import type { BattleArmy } from '../state/army/BattleArmy';
+import type { UnitType, HeroUnitType, RegularUnitType, WarMachineType } from '../types/UnitType';
+import type { ArmedWarMachine } from '../types/WarMachineArming';
+import type { SimulationResult } from '../domain/battle/simulateBattle';
 
 interface Unit {
   id: number;
@@ -47,9 +48,17 @@ export default class BattleScene extends Phaser.Scene {
   private nextUnitId = 1;
   private statsTimer?: Phaser.Time.TimerEvent;
   private onStats?: (stats: BattleStats) => void;
+  private humanArmy?: BattleArmy;
+  private computerArmy?: BattleArmy;
 
   constructor() {
     super('BattleScene');
+  }
+
+  setArmies(humanArmy: BattleArmy, computerArmy: BattleArmy) {
+    this.humanArmy = humanArmy;
+    this.computerArmy = computerArmy;
+    this.deployManager?.setArmies(humanArmy, computerArmy);
   }
 
   create() {
@@ -60,6 +69,10 @@ export default class BattleScene extends Phaser.Scene {
       () => this.emitStats()
     );
     this.deployManager.initialize();
+
+    if (this.humanArmy && this.computerArmy) {
+      this.deployManager.setArmies(this.humanArmy, this.computerArmy);
+    }
 
     this.statsTimer = this.time.addEvent({
       delay: 300,
@@ -162,6 +175,10 @@ export default class BattleScene extends Phaser.Scene {
   setDeployUnitType(type: RegularUnitType | HeroUnitType | WarMachineType) {
     this.deployManager?.setDeployUnitType(type);
     this.emitStats();
+  }
+
+  getAvailableUnits(): Map<UnitType, number> {
+    return this.deployManager?.getAvailableUnits() ?? new Map();
   }
 
   setStatsCallback(callback?: (stats: BattleStats) => void) {
@@ -602,7 +619,8 @@ export default class BattleScene extends Phaser.Scene {
     unit.range = derived.range;
     unit.rangeDamage = armedStats.rangeDamage;
     unit.isRanged = derived.isRanged;
-    unit.cooldownMs = derived.cooldownMs;
+    // Use cooldown from armed stats if available, otherwise from derived
+    unit.cooldownMs = (armedStats as any).cooldownMs ?? derived.cooldownMs;
   }
 
   /**

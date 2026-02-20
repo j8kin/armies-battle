@@ -1,11 +1,7 @@
 import Phaser from 'phaser';
-import { RegularUnitName } from '../types/UnitType';
-import type { HeroUnitType, RegularUnitType, UnitType, WarMachineType } from '../types/UnitType';
-import { unitCombatStats } from '../domain/army/unitRepository';
 import { deriveBattleStats, rangeToPixels } from '../domain/battle/combatRules';
 import { isHeroType, isRegularUnit, isWarMachine } from '../domain/army/unitTypeChecks';
 import { calculateArmedWarMachineStats } from '../types/WarMachineArming';
-import type { ArmedWarMachine } from '../types/WarMachineArming';
 import {
   MAP_HEIGHT,
   MAX_UNITS,
@@ -16,8 +12,13 @@ import {
   ZONE_ATTACKER,
   ZONE_DEFENDER,
 } from './battleConfig';
-import type { Phase, Team } from './battleTypes';
+import { RegularUnitName } from '../types/UnitType';
+import { unitCombatStats } from '../domain/army/unitRepository';
 import { TEAM_COLORS, UNIT_TYPE_COLORS } from './unitVisuals';
+import type { Phase, Team } from './battleTypes';
+import type { HeroUnitType, RegularUnitType, UnitType, WarMachineType } from '../types/UnitType';
+import type { ArmedWarMachine } from '../types/WarMachineArming';
+import type { BattleArmy } from '../state/army/BattleArmy';
 
 export interface DeployPack {
   id: number;
@@ -28,6 +29,7 @@ export interface DeployPack {
   range: number;
   isRanged: boolean;
   armedWarMachine?: ArmedWarMachine;
+  hidden?: boolean;
 }
 
 type Zone = { x: number; width: number };
@@ -44,11 +46,40 @@ export default class DeployManager {
   private rangeIndicator?: Phaser.GameObjects.Graphics;
   private onChange?: () => void;
   private getPhase: () => Phase;
+  private humanArmy?: BattleArmy;
+  private computerArmy?: BattleArmy;
+  private availableUnits = new Map<UnitType, number>();
 
   constructor(scene: Phaser.Scene, getPhase: () => Phase, onChange?: () => void) {
     this.scene = scene;
     this.getPhase = getPhase;
     this.onChange = onChange;
+  }
+
+  setArmies(humanArmy: BattleArmy, computerArmy: BattleArmy) {
+    this.humanArmy = humanArmy;
+    this.computerArmy = computerArmy;
+    this.resetAvailability();
+    this.autoDeployComputer();
+  }
+
+  private resetAvailability() {
+    this.availableUnits.clear();
+    if (this.humanArmy) {
+      this.humanArmy.regulars.forEach((r) => {
+        this.availableUnits.set(r.type, (this.availableUnits.get(r.type) ?? 0) + r.count);
+      });
+      this.humanArmy.heroes.forEach((h) => {
+        this.availableUnits.set(h.type, (this.availableUnits.get(h.type) ?? 0) + 1);
+      });
+      this.humanArmy.warMachines.forEach((wm) => {
+        this.availableUnits.set(wm.type, (this.availableUnits.get(wm.type) ?? 0) + wm.count);
+      });
+    }
+  }
+
+  getAvailableUnits(): Map<UnitType, number> {
+    return new Map(this.availableUnits);
   }
 
   initialize() {
@@ -75,14 +106,21 @@ export default class DeployManager {
         return;
       }
 
-      const zone = this.getZoneForTeam(this.deployTeam);
+      // Human can only place their units on their area
+      const team = this.deployTeam;
+      if (this.humanArmy?.battleSide !== team) {
+        return;
+      }
+
+      const zone = this.getZoneForTeam(team);
       if (!this.pointInZone(pointer.x, pointer.y, zone)) {
         return;
       }
 
-      this.spawnPack(pointer.x, pointer.y, this.deployTeam, this.deployUnitType);
+      this.spawnPack(pointer.x, pointer.y, team, this.deployUnitType);
       this.emitChange();
     });
+    // ... existing initialization code ...
 
     this.scene.input.on(
       'gameobjectdown',
@@ -93,6 +131,11 @@ export default class DeployManager {
 
         const pack = this.getPackFromObject(gameObject);
         if (!pack) {
+          return;
+        }
+
+        // Computer units are hidden and cannot be interacted with during deployment
+        if (pack.hidden) {
           return;
         }
 
@@ -128,6 +171,11 @@ export default class DeployManager {
       if (!pack) {
         return;
       }
+
+      if (pack.hidden) {
+        return;
+      }
+
       if (this.warMachineToArm?.id === pack.id) {
         this.exitArmingMode();
       }
@@ -142,7 +190,7 @@ export default class DeployManager {
         }
 
         const pack = this.getPackFromObject(gameObject);
-        if (!pack) {
+        if (!pack || pack.hidden) {
           return;
         }
 
@@ -154,6 +202,121 @@ export default class DeployManager {
         }
       }
     );
+  }
+
+  autoDeployComputer() {
+    if (!this.computerArmy) return;
+
+    const team = this.computerArmy.battleSide;
+    const zone = this.getZoneForTeam(team);
+
+    // Template-based placement:
+    // Melee in front
+    // Ranged behind melee
+    // Heroes behind everyone
+    // War machines at the very back or flanks
+
+    const meleeUnits = this.computerArmy.regulars.filter((r) => !unitCombatStats[r.type].range);
+    const rangedUnits = this.computerArmy.regulars.filter((r) => (unitCombatStats[r.type].range ?? 0) > 0);
+    const heroes = this.computerArmy.heroes;
+    const warMachines = this.computerArmy.warMachines;
+
+    let currentX: number;
+    const isAttacker = team === 'attacker';
+
+    // X-coordinates relative to zone
+    // If attacker (left side), front is right side of zone
+    // If defender (right side), front is left side of zone
+
+    const stepX = 60;
+    const centerX = zone.x + zone.width / 2;
+    const startY = 100;
+    const stepY = 80;
+
+    if (isAttacker) {
+      // Attacker: front is zone.x + zone.width, back is zone.x
+      currentX = zone.x + zone.width - 50;
+    } else {
+      // Defender: front is zone.x, back is zone.x + zone.width
+      currentX = zone.x + 50;
+    }
+
+    const nextX = () => {
+      if (isAttacker) currentX -= stepX;
+      else currentX += stepX;
+    };
+
+    // 1. Place Melee
+    let y = startY;
+    meleeUnits.forEach((u) => {
+      const packsNeeded = Math.ceil(u.count / PACK_SIZE);
+      for (let i = 0; i < packsNeeded; i++) {
+        this.spawnPack(currentX, y, team, u.type, true);
+        y += stepY;
+        if (y > MAP_HEIGHT - 100) {
+          y = startY;
+          nextX();
+        }
+      }
+    });
+    if (y !== startY) nextX();
+
+    // 2. Place Ranged
+    y = startY;
+    rangedUnits.forEach((u) => {
+      const packsNeeded = Math.ceil(u.count / PACK_SIZE);
+      for (let i = 0; i < packsNeeded; i++) {
+        this.spawnPack(currentX, y, team, u.type, true);
+        y += stepY;
+        if (y > MAP_HEIGHT - 100) {
+          y = startY;
+          nextX();
+        }
+      }
+    });
+    if (y !== startY) nextX();
+
+    // 3. Place Heroes
+    y = startY;
+    heroes.forEach((h) => {
+      this.spawnPack(currentX, y, team, h.type, true);
+      y += stepY;
+      if (y > MAP_HEIGHT - 100) {
+        y = startY;
+        nextX();
+      }
+    });
+    if (y !== startY) nextX();
+
+    // 4. Place War Machines
+    y = startY;
+    const meleeType = meleeUnits[0]?.type;
+    warMachines.forEach((wm) => {
+      for (let i = 0; i < wm.count; i++) {
+        const wmPack = this.spawnPack(currentX, y, team, wm.type, true);
+        if (wmPack && meleeType) {
+          // Auto-arm computer war machines with melee units
+          const armingStats = unitCombatStats[meleeType];
+          const armedStats = calculateArmedWarMachineStats(armingStats, PACK_SIZE);
+          wmPack.armedWarMachine = {
+            armedWith: meleeType,
+            combatStats: armedStats as any,
+          };
+          wmPack.range = rangeToPixels(armedStats.range);
+          wmPack.isRanged = true;
+          wmPack.sprite.setStrokeStyle(2, 0xffa500, 1);
+          const armedColor = UNIT_TYPE_COLORS[meleeType];
+          if (armedColor) {
+            wmPack.sprite.setFillStyle(armedColor, 0.95);
+          }
+        }
+        y += stepY;
+        if (y > MAP_HEIGHT - 100) {
+          y = startY;
+          nextX();
+        }
+      }
+    });
   }
 
   destroy() {
@@ -176,6 +339,8 @@ export default class DeployManager {
     this.packs.forEach((pack) => pack.sprite.destroy());
     this.packs.clear();
     this.nextPackId = 1;
+    this.resetAvailability(); // Reset counts
+    this.autoDeployComputer(); // Re-deploy computer after reset
     this.emitChange();
   }
 
@@ -240,7 +405,7 @@ export default class DeployManager {
     return { x: clampedX, y: clampedY };
   }
 
-  private spawnPack(x: number, y: number, team: Team, type: UnitType) {
+  private spawnPack(x: number, y: number, team: Team, type: UnitType, hidden = false): DeployPack | undefined {
     const zone = this.getZoneForTeam(team);
     if (!this.pointInZone(x, y, zone)) {
       return;
@@ -248,25 +413,47 @@ export default class DeployManager {
 
     const isSingleUnit = isHeroType(type as HeroUnitType) || isWarMachine(type as WarMachineType);
     const unitsToSpawn = isSingleUnit ? 1 : PACK_SIZE;
+
+    // Check availability only for manual human deployment
+    if (!hidden) {
+      const availableCount = this.availableUnits.get(type) ?? 0;
+      if (availableCount < unitsToSpawn) {
+        console.warn(`Not enough units of type ${type} available.`);
+        return;
+      }
+      // Consume units
+      this.availableUnits.set(type, availableCount - unitsToSpawn);
+    }
+
     const currentCount = this.getTeamUnitCount(team);
 
     if (currentCount + unitsToSpawn > MAX_UNITS) {
+      // If we failed to spawn, we should return units to pool if it was human deployment
+      if (!hidden) {
+        this.availableUnits.set(type, (this.availableUnits.get(type) ?? 0) + unitsToSpawn);
+      }
       return;
     }
 
     const { x: packX, y: packY } = this.clampToZone(x, y, zone);
-    const pack = this.createPack(packX, packY, team, type, unitsToSpawn);
+    const pack = this.createPack(packX, packY, team, type, unitsToSpawn, hidden);
     this.packs.set(pack.id, pack);
+    return pack;
   }
 
-  private createPack(x: number, y: number, team: Team, type: UnitType, size: number): DeployPack {
+  private createPack(x: number, y: number, team: Team, type: UnitType, size: number, hidden = false): DeployPack {
     const combatData = unitCombatStats[type as RegularUnitType | HeroUnitType | WarMachineType];
     const derived = deriveBattleStats(combatData);
     const packColor = UNIT_TYPE_COLORS[type] ?? TEAM_COLORS[team];
     const radius = this.getPackRadius(type);
     const sprite = this.scene.add.circle(x, y, radius, packColor, 0.95);
-    sprite.setInteractive({ useHandCursor: true });
-    this.scene.input.setDraggable(sprite);
+
+    if (hidden) {
+      sprite.setAlpha(0);
+    } else {
+      sprite.setInteractive({ useHandCursor: true });
+      this.scene.input.setDraggable(sprite);
+    }
 
     const pack: DeployPack = {
       id: this.nextPackId,
@@ -276,6 +463,7 @@ export default class DeployManager {
       sprite,
       range: derived.range,
       isRanged: derived.isRanged,
+      hidden,
     };
 
     this.nextPackId += 1;
@@ -304,6 +492,9 @@ export default class DeployManager {
 
   private isPointerHandledByPack(pointer: Phaser.Input.Pointer) {
     for (const pack of Array.from(this.packs.values())) {
+      // Don't block clicking through hidden packs
+      if (pack.hidden) continue;
+
       const distance = Phaser.Math.Distance.Between(pointer.x, pointer.y, pack.sprite.x, pack.sprite.y);
       if (distance <= pack.sprite.radius) {
         return true;
@@ -313,6 +504,7 @@ export default class DeployManager {
   }
 
   private selectPack(pack: DeployPack) {
+    if (pack.hidden) return;
     this.selectedPackId = pack.id;
     this.updateRangeIndicator(pack);
   }
@@ -323,7 +515,7 @@ export default class DeployManager {
   }
 
   private updateRangeIndicator(pack: DeployPack) {
-    if (!this.rangeIndicator) {
+    if (!this.rangeIndicator || pack.hidden) {
       return;
     }
     this.rangeIndicator.clear();
@@ -339,7 +531,21 @@ export default class DeployManager {
     this.rangeIndicator.fillCircle(pack.sprite.x, pack.sprite.y, pack.range);
   }
 
-  private removePack(pack: DeployPack) {
+  private removePack(pack: DeployPack, skipReturnUnits = false) {
+    if (pack.hidden) return; // Cannot remove computer units
+
+    if (!skipReturnUnits) {
+      // Return units to pool
+      this.availableUnits.set(pack.type, (this.availableUnits.get(pack.type) ?? 0) + pack.size);
+
+      // If it was an armed war machine, also return the units it was armed with
+      if (pack.armedWarMachine) {
+        const armedWithType = pack.armedWarMachine.armedWith;
+        // Armed war machines are always armed with a full pack of units
+        this.availableUnits.set(armedWithType, (this.availableUnits.get(armedWithType) ?? 0) + PACK_SIZE);
+      }
+    }
+
     if (this.selectedPackId === pack.id) {
       this.clearSelection();
     }
@@ -351,6 +557,7 @@ export default class DeployManager {
   }
 
   private enterArmingMode(pack: DeployPack) {
+    if (pack.hidden) return;
     this.armingMode = true;
     this.warMachineToArm = pack;
     pack.sprite.setStrokeStyle(3, 0xffff00, 1);
@@ -365,6 +572,7 @@ export default class DeployManager {
   }
 
   private armWarMachine(warMachine: DeployPack, armingPack: DeployPack) {
+    if (warMachine.hidden || armingPack.hidden) return;
     if (!isRegularUnit(armingPack.type)) {
       return;
     }
@@ -378,10 +586,10 @@ export default class DeployManager {
       return;
     }
 
-    const armedStats = calculateArmedWarMachineStats(armingStats);
+    const armedStats = calculateArmedWarMachineStats(armingStats, armingPack.size);
     warMachine.armedWarMachine = {
       armedWith: armingPack.type as RegularUnitType,
-      combatStats: armedStats,
+      combatStats: armedStats as any, // Cast because of cooldownMs
     };
 
     warMachine.range = rangeToPixels(armedStats.range);
@@ -393,7 +601,9 @@ export default class DeployManager {
       warMachine.sprite.setFillStyle(armedColor, 0.95);
     }
 
-    this.removePack(armingPack);
+    // This pack is now "inside" the war machine, so skip returning to pool
+    this.removePack(armingPack, true);
+
     if (this.selectedPackId === warMachine.id) {
       this.updateRangeIndicator(warMachine);
     }

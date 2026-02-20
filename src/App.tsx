@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
-import Phaser from 'phaser';
 import './App.css';
+import Phaser from 'phaser';
 import BattleScene from './game/BattleScene';
-import { HeroUnitName, RegularUnitName, WarMachineName } from './types/UnitType';
-import type { BattleStats, Team } from './game/battleTypes';
+import { useEffect, useRef, useState } from 'react';
+import { RegularUnitName } from './types/UnitType';
+import { HUMAN_ARMY, COMPUTER_ARMY } from './game/defaultArmies';
+import type { BattleStats } from './game/battleTypes';
 import type { UnitType } from './types/UnitType';
 import type { SimulationResult } from './domain/battle/simulateBattle';
 
@@ -18,9 +19,16 @@ function App() {
     attacker: 0,
     defender: 0,
   });
-  const [deployTeam, setDeployTeam] = useState<Team>('attacker');
-  const [deployUnitType, setDeployUnitType] = useState<UnitType>(RegularUnitName.WARRIOR);
+
+  // Set default deployment unit to first one in human army
+  const firstUnit =
+    HUMAN_ARMY.regulars[0]?.type ||
+    HUMAN_ARMY.heroes[0]?.type ||
+    HUMAN_ARMY.warMachines[0]?.type ||
+    RegularUnitName.WARRIOR;
+  const [deployUnitType, setDeployUnitType] = useState<UnitType>(firstUnit);
   const [autoResolveResult, setAutoResolveResult] = useState<SimulationResult | null>(null);
+  const [availableUnits, setAvailableUnits] = useState<Map<UnitType, number>>(new Map());
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -29,6 +37,9 @@ function App() {
 
     const scene = new BattleScene();
     sceneRef.current = scene;
+
+    // Set armies before game creation if possible, or via method
+    scene.setArmies(HUMAN_ARMY, COMPUTER_ARMY);
 
     const game = new Phaser.Game({
       type: Phaser.AUTO,
@@ -45,7 +56,12 @@ function App() {
       scene: [scene],
     });
 
-    const onStats = (nextStats: BattleStats) => setStats(nextStats);
+    const onStats = (nextStats: BattleStats) => {
+      setStats(nextStats);
+      if (sceneRef.current) {
+        setAvailableUnits(sceneRef.current.getAvailableUnits());
+      }
+    };
     scene.setStatsCallback(onStats);
 
     return () => {
@@ -56,8 +72,9 @@ function App() {
   }, []);
 
   useEffect(() => {
-    sceneRef.current?.setDeployTeam(deployTeam);
-  }, [deployTeam]);
+    // Human is always their side (usually attacker in this setup)
+    sceneRef.current?.setDeployTeam(HUMAN_ARMY.battleSide);
+  }, []);
 
   useEffect(() => {
     sceneRef.current?.setDeployUnitType(deployUnitType);
@@ -75,10 +92,15 @@ function App() {
 
   const resetBattle = () => {
     sceneRef.current?.resetBattle();
-    setDeployTeam('attacker');
-    setDeployUnitType(RegularUnitName.WARRIOR);
+    setDeployUnitType(firstUnit);
     setAutoResolveResult(null);
   };
+
+  const humanRegulars = HUMAN_ARMY.regulars.map((r) => r.type);
+  const humanHeroes = HUMAN_ARMY.heroes.map((h) => h.type);
+  const humanWarMachines = HUMAN_ARMY.warMachines.map((wm) => wm.type);
+
+  const getAvailableCount = (type: UnitType) => availableUnits.get(type) ?? 0;
 
   return (
     <div className="app">
@@ -93,11 +115,11 @@ function App() {
             <strong>{stats.phase === 'deploy' ? 'Deploy' : 'Battle'}</strong>
           </div>
           <div>
-            <span>Attacker</span>
+            <span>Attacker (You)</span>
             <strong>{stats.attacker}</strong>
           </div>
           <div>
-            <span>Defender</span>
+            <span>Defender (CPU)</span>
             <strong>{stats.defender}</strong>
           </div>
           <div>
@@ -111,70 +133,78 @@ function App() {
         <div className="control-group">
           <span>Deploy team</span>
           <div className="button-row">
-            <button
-              type="button"
-              className={deployTeam === 'attacker' ? 'is-active' : ''}
-              onClick={() => setDeployTeam('attacker')}
-            >
-              Attacker
-            </button>
-            <button
-              type="button"
-              className={deployTeam === 'defender' ? 'is-active' : ''}
-              onClick={() => setDeployTeam('defender')}
-            >
-              Defender
+            <button type="button" className="is-active" disabled>
+              {HUMAN_ARMY.battleSide === 'attacker' ? 'Attacker' : 'Defender'}
             </button>
           </div>
         </div>
-        <div className="control-group">
-          <span>Regular Units</span>
-          <div className="button-row" style={{ flexWrap: 'wrap', gap: '4px' }}>
-            {Object.values(RegularUnitName).map((unitName) => (
-              <button
-                key={unitName}
-                type="button"
-                className={deployUnitType === unitName ? 'is-active' : ''}
-                onClick={() => setDeployUnitType(unitName)}
-                style={{ fontSize: '12px', padding: '4px 8px' }}
-              >
-                {unitName}
-              </button>
-            ))}
+        {humanRegulars.length > 0 && (
+          <div className="control-group">
+            <span>Your Regular Units</span>
+            <div className="button-row" style={{ flexWrap: 'wrap', gap: '4px' }}>
+              {humanRegulars.map((unitName) => {
+                const count = getAvailableCount(unitName);
+                return (
+                  <button
+                    key={unitName}
+                    type="button"
+                    className={deployUnitType === unitName ? 'is-active' : ''}
+                    onClick={() => setDeployUnitType(unitName)}
+                    disabled={count < 20}
+                    style={{ fontSize: '12px', padding: '4px 8px' }}
+                  >
+                    {unitName} ({count})
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
-        <div className="control-group">
-          <span>Hero Units</span>
-          <div className="button-row" style={{ flexWrap: 'wrap', gap: '4px' }}>
-            {Object.values(HeroUnitName).map((unitName) => (
-              <button
-                key={unitName}
-                type="button"
-                className={deployUnitType === unitName ? 'is-active' : ''}
-                onClick={() => setDeployUnitType(unitName)}
-                style={{ fontSize: '12px', padding: '4px 8px' }}
-              >
-                {unitName}
-              </button>
-            ))}
+        )}
+        {humanHeroes.length > 0 && (
+          <div className="control-group">
+            <span>Your Hero Units</span>
+            <div className="button-row" style={{ flexWrap: 'wrap', gap: '4px' }}>
+              {humanHeroes.map((unitName) => {
+                const count = getAvailableCount(unitName);
+                return (
+                  <button
+                    key={unitName}
+                    type="button"
+                    className={deployUnitType === unitName ? 'is-active' : ''}
+                    onClick={() => setDeployUnitType(unitName)}
+                    disabled={count < 1}
+                    style={{ fontSize: '12px', padding: '4px 8px' }}
+                  >
+                    {unitName} ({count})
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
-        <div className="control-group">
-          <span>War Machines</span>
-          <div className="button-row" style={{ flexWrap: 'wrap', gap: '4px' }}>
-            {Object.values(WarMachineName).map((unitName) => (
-              <button
-                key={unitName}
-                type="button"
-                className={deployUnitType === unitName ? 'is-active' : ''}
-                onClick={() => setDeployUnitType(unitName)}
-                style={{ fontSize: '12px', padding: '4px 8px' }}
-              >
-                {unitName}
-              </button>
-            ))}
+        )}
+        {humanWarMachines.length > 0 && (
+          <div className="control-group">
+            <span>Your War Machines</span>
+            <div className="button-row" style={{ flexWrap: 'wrap', gap: '4px' }}>
+              {humanWarMachines.map((unitName) => {
+                const count = getAvailableCount(unitName);
+                return (
+                  <button
+                    key={unitName}
+                    type="button"
+                    className={deployUnitType === unitName ? 'is-active' : ''}
+                    onClick={() => setDeployUnitType(unitName)}
+                    disabled={count < 1}
+                    style={{ fontSize: '12px', padding: '4px 8px' }}
+                  >
+                    {unitName} ({count})
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
+
         <div className="control-group">
           <span>Actions</span>
           <div className="button-row">
@@ -196,12 +226,9 @@ function App() {
         <aside className="app__tips">
           <h2>Deployment rules</h2>
           <ul>
-            <li>Attacker controls the left 30% of the map.</li>
-            <li>Neutral ground spans the middle 10%.</li>
-            <li>Defender controls the right 60% of the map.</li>
-            <li>Click to drop a 20-unit pack at once.</li>
-            <li>Click a pack to preview its attack range (armed war machines only).</li>
-            <li>Drag a pack to reposition it.</li>
+            <li>You control the {HUMAN_ARMY.battleSide === 'attacker' ? 'left 30%' : 'right 60%'} of the map.</li>
+            <li>Click to drop a pack from your army.</li>
+            <li>Computer units are hidden until the battle starts.</li>
             <li>Right-click a pack to remove it.</li>
           </ul>
         </aside>
